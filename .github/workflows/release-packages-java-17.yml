@@ -65,10 +65,8 @@ jobs:
         run: |
           for jar in target/*.jar; do
             [ -e "$jar" ] || continue
-            gh attestation verify $jar --repo "${{ github.repository }}"
+            gh attestation verify $jar --repo "${{ github.repository }}" | tee
           done
-          gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}"
+          gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}" | tee
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
