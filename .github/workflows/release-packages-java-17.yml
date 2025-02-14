@@ -62,13 +62,20 @@ jobs:
 
 
       - name: Verify build artifact with GitHub Attestation
+        id: verify_attestation
         run: |
+          output=""
           for jar in target/*.jar; do
             [ -e "$jar" ] || continue
-            gh attestation verify $jar --repo "${{ github.repository }}"
+            echo "Verifying $jar"
+            result=$(gh attestation verify $jar --repo "${{ github.repository }}")
+            echo "$result"
+            output="$output\n$result"
           done
-          gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}"
+          echo "Verifying POM file"
+          result=$(gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}")
+          echo "$result"
+          output="$output\n$result"
+          echo -e "attestation_output=$output" >> $GITHUB_ENV
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
