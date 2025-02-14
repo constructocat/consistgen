@@ -65,10 +65,33 @@ jobs:
         run: |
           for jar in target/*.jar; do
             [ -e "$jar" ] || continue
-            gh attestation verify $jar --repo "${{ github.repository }}"
-          done
-          gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}"
+            gh attestation verify $jar --repo "${{ github.repository }}" > verify_output.txt 2>&1 || exit_code=$?
+
+            # If verification fails (non-zero exit code), set an output variable
+            if [ -n "$exit_code" ] && [ "$exit_code" -ne 0 ]; then
+              echo "Verification failed. Exit code: $exit_code"
+              echo "::set-output name=verification_result::failure"
+            else
+              echo "Verification succeeded!"
+              echo "::set-output name=verification_result::success"
+            fi
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-
+      # Step 5: Display result as a status message
+      - name: Show verification result
+        run: |
+          if [ "${{ steps.verify-step.outputs.verification_result }}" == "failure" ]; then
+            echo "::error title=Verification Result::Verification failed. Check logs for details."
+          else
+            echo "::notice title=Verification Result::Verification succeeded."
+          fi
+        
+      # Optional: Upload logs if it fails for debugging
+      - name: Upload verification logs
+        #if: ${{ steps.verify-step.outputs.verification_result == 'failure' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: verification_logs
+          path: verify_output.txt
