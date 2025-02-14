@@ -60,15 +60,39 @@ jobs:
           subject-path: "pom.xml"
           subject-name: "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
 
-
       - name: Verify build artifact with GitHub Attestation
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for jar in target/*.jar; do
             [ -e "$jar" ] || continue
-            gh attestation verify $jar --repo "${{ github.repository }}"
+            echo "Verifying ${jar}"
+            script -q -c "gh attestation verify "${jar}" --repo ${{ github.repository }}"
           done
-          gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}"
+          script -q -c "gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo ${{ github.repository }}"
+
+      - name: Fail workflow if artifact is invalid
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
+        run: |
+          verification_failed=false
+          for jar in target/*.jar; do
+            [ -e "$jar" ] || continue
+            echo "Verifying ${jar}"
+            result=$(script -q -c "gh attestation verify "${jar}" --repo ${{ github.repository }} --format json --jq '.[0].verificationResult.signature.certificate.githubWorkflowRepository'")
+            if [ "$result" != "${{ github.repository }}" ]; then
+              echo "Verification failed for ${jar}"
+              verification_failed=true
+            fi
+          done
+          pom_result=$(script -q -c "gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo ${{ github.repository }} --format json --jq '.[0].verificationResult.signature.certificate.githubWorkflowRepository'")
+          if [ "$pom_result" != "${{ github.repository }}" ]; then
+            echo "Verification failed for POM file"
+            verification_failed=true
+          fi
+          if [ "$verification_failed" = true ]; then
+            echo "Some verifications failed"
+            exit 1
+          else
+            echo "All verifications passed"
+          fi
