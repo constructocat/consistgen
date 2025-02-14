@@ -60,15 +60,12 @@ jobs:
           subject-path: "pom.xml"
           subject-name: "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
 
-
       - name: Verify build artifact with GitHub Attestation
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for jar in target/*.jar; do
             [ -e "$jar" ] || continue
-            gh attestation verify $jar --repo "${{ github.repository }}"
+            echo "Verifying ${jar}"
+            script -q -c "gh attestation verify "${jar}" --repo ${{ github.repository }}"
           done
-          gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
