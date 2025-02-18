@@ -1,5 +1,7 @@
-name: New Publish Java version to Packages
+name: Verify and Publish Java Artifacts
+
 on:
+  # Trigger the workflow on a release event
   release:
     types: [published]
 
@@ -7,6 +9,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
 
+    # Permissions required for the workflow
     permissions:
       contents: write
       id-token: write
@@ -14,46 +17,53 @@ jobs:
       packages: write
 
     steps:
+
+      # Checkout the code
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      # Set up Java for publishing to GitHub Packages
       - name: Set up Java for publishing to GitHub Packages
         uses: actions/setup-java@v4
         with:
           java-version: 17
           distribution: corretto
 
+      # Extract Maven Artifacts from the project
       - name: Extract Maven Artifacts
         id: maven_artifact
         run: |
           echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
           echo "artifactId=$(mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout)" >> $GITHUB_OUTPUT
 
+      # Build the Java project
       - name: Build Java Project
         run: mvn clean package -ntp
 
+      # Publish the artifacts to GitHub Packages
       - name: Publish to GitHub Packages
         run: mvn --batch-mode deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Download the artifacts from GitHub Packages
       - name: Download Artifacts from GitHub Packages
         run: |
             mkdir -p downloaded_artifacts
             echo "Downloading JAR files"
             for jar in target/*.jar; do
-            [ -e "$jar" ] || continue
-            filename=$(basename $jar)
-            url="https://maven.pkg.github.com/${{ github.repository }}/$filename"
-            echo "Downloading $filename from $url"
-            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$filename "$url"
-            if [ $? -eq 0 ]; then
-            echo "Downloaded $filename successfully"
-            else
-            echo "Failed to download $filename"
-            fi
+              [ -e "$jar" ] || continue
+              filename=$(basename $jar)
+              url="https://maven.pkg.github.com/${{ github.repository }}/$filename"
+              echo "Downloading $filename from $url"
+              curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$filename "$url"
+              if [ $? -eq 0 ]; then
+              echo "Downloaded $filename successfully"
+              else
+              echo "Failed to download $filename"
+              fi
             done
             echo "Downloading POM file"
             pom_filename="${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
@@ -61,26 +71,28 @@ jobs:
             echo "Downloading $pom_filename from $pom_url"
             curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$pom_filename "$pom_url"
             if [ $? -eq 0 ]; then
-            echo "Downloaded $pom_filename successfully"
+              echo "Downloaded $pom_filename successfully"
             else
-            echo "Failed to download $pom_filename"
+              echo "Failed to download $pom_filename"
             fi
 
-      - name: GitHub Attestation for JAR files
+      # Generate GitHub Attestation for JAR files
+      - name: Generate GitHub Attestation for JAR files
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: "downloaded_artifacts/*.jar"
 
-      - name: GitHub Attestation for POM file
+      # Generate GitHub Attestation for POM file
+      - name: Generate GitHub Attestation for POM file
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: "downloaded_artifacts/*.pom"
           subject-name: "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
 
+      # Publish the downlaoded artifacts to GitHub Release
       - name: Publish Java Artifacts to GitHub Release
         run: |
-          cp pom.xml ${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom
-          gh release upload ${{github.event.release.tag_name}} "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
+          gh release upload ${{github.event.release.tag_name}} "downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
           for jar in downloaded_artifacts/*.jar; do
             [ -e "$jar" ] || continue
             gh release upload ${{github.event.release.tag_name}} "$jar"
@@ -92,7 +104,8 @@ jobs:
       - name: List downloaded artifacts
         run: ls -l downloaded_artifacts
 
-      - name: Verify build artifact with GitHub Attestation
+      # Verify the build artifacts with GitHub Attestation
+      - name: Verify build artifacts with GitHub Attestation
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -103,7 +116,8 @@ jobs:
           done
           script -q -c "gh attestation verify "downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo ${{ github.repository }}"
 
-      - name: Fail workflow if artifact is invalid
+      # Fail the workflow if the verification fails
+      - name: Fail workflow if artifact attestations are invalid
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
