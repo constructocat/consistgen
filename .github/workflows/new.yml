@@ -63,28 +63,74 @@ jobs:
 
       - name: Download Artifacts from GitHub Packages
         run: |
-          mkdir -p downloaded_artifacts
-          echo "Downloading JAR files"
-          for jar in target/*.jar; do
+            mkdir -p downloaded_artifacts
+            echo "Downloading JAR files"
+            for jar in target/*.jar; do
             [ -e "$jar" ] || continue
-            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$(basename $jar) "https://maven.pkg.github.com/${{ github.repository }}/$(basename $jar)"
+            filename=$(basename $jar)
+            url="https://maven.pkg.github.com/${{ github.repository }}/$filename"
+            echo "Downloading $filename from $url"
+            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$filename "$url"
+            if [ $? -eq 0 ]; then
+            echo "Downloaded $filename successfully"
+            else
+            echo "Failed to download $filename"
+            fi
+            done
+            echo "Downloading POM file"
+            pom_filename="${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
+            pom_url="https://maven.pkg.github.com/${{ github.repository }}/$pom_filename"
+            echo "Downloading $pom_filename from $pom_url"
+            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$pom_filename "$pom_url"
+            if [ $? -eq 0 ]; then
+            echo "Downloaded $pom_filename successfully"
+            else
+            echo "Failed to download $pom_filename"
+            fi
+
+      # list files in downloaded_artifacts directory
+      - name: List downloaded artifacts
+        run: ls -l downloaded_artifacts
+
+      - name: Verify build artifact with GitHub Attestation
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for jar in downloaded_artifacts/*.jar; do
+            [ -e "$jar" ] || continue
+            echo "Verifying ${jar}"
+            script -q -c "gh attestation verify "${jar}" --repo ${{ github.repository }}"
           done
-          echo "Downloading POM file"
-          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom "https://maven.pkg.github.com/${{ github.repository }}/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
+          script -q -c "gh attestation verify "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo ${{ github.repository }}"
 
       - name: Verify downloaded artifacts with GitHub Attestation
         run: |
-          for jar in downloaded_artifacts/*.jar; do
+            verification_failed=false
+            for jar in downloaded_artifacts/*.jar; do
             [ -e "$jar" ] || continue
             echo "Verifying $jar"
             result=$(gh attestation verify $jar --repo "${{ github.repository }}")
             echo "$result"
-          done
-          echo "Verifying POM file"
-          result=$(gh attestation verify "downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}")
-          echo "$result"
+            if [[ "$result" != *"Verification successful"* ]]; then
+            echo "Verification failed for $jar"
+            verification_failed=true
+            fi
+            done
+            echo "Verifying POM file"
+            result=$(gh attestation verify "downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}")
+            echo "$result"
+            if [[ "$result" != *"Verification successful"* ]]; then
+            echo "Verification failed for POM file"
+            verification_failed=true
+            fi
+            if [ "$verification_failed" = true ]; then
+            echo "Some verifications failed"
+            exit 1
+            else
+            echo "All verifications passed"
+            fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fail workflow if artifact is invalid
         env:
