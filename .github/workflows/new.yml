@@ -1,0 +1,113 @@
+name: New Publish Java version to Packages
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Java for publishing to GitHub Packages
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: corretto
+
+      - name: Extract Maven Artifacts
+        id: maven_artifact
+        run: |
+          echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
+          echo "artifactId=$(mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout)" >> $GITHUB_OUTPUT
+
+      - name: Build Java Project
+        run: mvn clean package -ntp
+
+      - name: Publish to GitHub Packages
+        run: mvn --batch-mode deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Java Artifacts to GitHub Release
+        run: |
+          cp pom.xml ${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom
+          gh release upload ${{github.event.release.tag_name}} "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
+          for jar in target/*.jar; do
+            [ -e "$jar" ] || continue
+            gh release upload ${{github.event.release.tag_name}} "$jar"
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.TOKEN }}
+
+      - name: GitHub Attestation for JAR files
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "target/*.jar"
+
+      - name: GitHub Attestation for POM file
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "pom.xml"
+          subject-name: "${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
+
+      - name: Download Artifacts from GitHub Packages
+        run: |
+          mkdir -p downloaded_artifacts
+          echo "Downloading JAR files"
+          for jar in target/*.jar; do
+            [ -e "$jar" ] || continue
+            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/$(basename $jar) "https://maven.pkg.github.com/${{ github.repository }}/$(basename $jar)"
+          done
+          echo "Downloading POM file"
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -L -o downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom "https://maven.pkg.github.com/${{ github.repository }}/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom"
+
+      - name: Verify downloaded artifacts with GitHub Attestation
+        run: |
+          for jar in downloaded_artifacts/*.jar; do
+            [ -e "$jar" ] || continue
+            echo "Verifying $jar"
+            result=$(gh attestation verify $jar --repo "${{ github.repository }}")
+            echo "$result"
+          done
+          echo "Verifying POM file"
+          result=$(gh attestation verify "downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo "${{ github.repository }}")
+          echo "$result"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail workflow if artifact is invalid
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          verification_failed=false
+          for jar in downloaded_artifacts/*.jar; do
+            [ -e "$jar" ] || continue
+            echo "Verifying ${jar}"
+            result=$(gh attestation verify "${jar}" --repo ${{ github.repository }} --format json --jq '.[0].verificationResult.signature.certificate.githubWorkflowRepository')
+            if [ "$result" != "${{ github.repository }}" ]; then
+              echo "Verification failed for ${jar}"
+              verification_failed=true
+            fi
+          done
+          pom_result=$(gh attestation verify "downloaded_artifacts/${{ steps.maven_artifact.outputs.artifactId }}-${{ steps.maven_artifact.outputs.version }}.pom" --repo ${{ github.repository }} --format json --jq '.[0].verificationResult.signature.certificate.githubWorkflowRepository')
+          if [ "$pom_result" != "${{ github.repository }}" ]; then
+            echo "Verification failed for POM file"
+            verification_failed=true
+          fi
+          if [ "$verification_failed" = true ]; then
+            echo "Some verifications failed"
+            exit 1
+          else
+            echo "All verifications passed"
+          fi
